@@ -56,7 +56,7 @@ export function startApiServer({ startStream, stopStream, broadcast }) {
 
       const data = await response.json();
 
-      if (!response.ok || data.code !== 100) {
+      if (!response.ok || data.code !== 1000) {
         return res.status(502).json({ error: "LiveAvatar token request failed", detail: data });
       }
 
