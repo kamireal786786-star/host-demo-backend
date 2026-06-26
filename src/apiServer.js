@@ -15,16 +15,6 @@ import {
   getConnectionState,
 } from "./store.js";
 
-/**
- * Starts the REST API and returns the underlying http.Server so the
- * WebSocket server can attach to the same port (required for Railway).
- *
- * @param {object} deps
- * @param {function} deps.startStream
- * @param {function} deps.stopStream
- * @param {function} deps.broadcast
- * @returns {import("http").Server}
- */
 export function startApiServer({ startStream, stopStream, broadcast }) {
   const app = express();
   app.use(express.json());
@@ -39,10 +29,28 @@ export function startApiServer({ startStream, stopStream, broadcast }) {
     res.json(getFullState());
   });
 
-  // ---- Product ----
-  app.get("/api/product", (req, res) => {
-    res.json(getProduct());
+  // ---- HeyGen token (keeps API key server-side) ----
+  app.post("/api/heygen-token", async (req, res) => {
+    if (!config.heygenApiKey) {
+      return res.status(500).json({ error: "HEYGEN_API_KEY not set on server" });
+    }
+    try {
+      const response = await fetch("https://api.heygen.com/v1/streaming.create_token", {
+        method: "POST",
+        headers: { "x-api-key": config.heygenApiKey },
+      });
+      const data = await response.json();
+      if (!response.ok || !data?.data?.token) {
+        return res.status(502).json({ error: "HeyGen token request failed", detail: data });
+      }
+      res.json({ token: data.data.token });
+    } catch (err) {
+      res.status(502).json({ error: "Failed to reach HeyGen API", detail: err.message });
+    }
   });
+
+  // ---- Product ----
+  app.get("/api/product", (req, res) => res.json(getProduct()));
 
   app.put("/api/product", (req, res) => {
     const updated = updateProduct(req.body);
@@ -51,9 +59,7 @@ export function startApiServer({ startStream, stopStream, broadcast }) {
   });
 
   // ---- AI instructions ----
-  app.get("/api/ai-instructions", (req, res) => {
-    res.json(getAiInstructions());
-  });
+  app.get("/api/ai-instructions", (req, res) => res.json(getAiInstructions()));
 
   app.put("/api/ai-instructions", (req, res) => {
     const updated = updateAiInstructions(req.body);
@@ -62,9 +68,7 @@ export function startApiServer({ startStream, stopStream, broadcast }) {
   });
 
   // ---- Bid rules ----
-  app.get("/api/bid", (req, res) => {
-    res.json(getBidState());
-  });
+  app.get("/api/bid", (req, res) => res.json(getBidState()));
 
   app.put("/api/bid/rules", (req, res) => {
     const updated = setBidRules(req.body);
@@ -79,9 +83,7 @@ export function startApiServer({ startStream, stopStream, broadcast }) {
   });
 
   // ---- Idle talk ----
-  app.get("/api/idle-talk", (req, res) => {
-    res.json(getIdleTalkSettings());
-  });
+  app.get("/api/idle-talk", (req, res) => res.json(getIdleTalkSettings()));
 
   app.put("/api/idle-talk", (req, res) => {
     const updated = updateIdleTalkSettings(req.body);
@@ -90,20 +92,16 @@ export function startApiServer({ startStream, stopStream, broadcast }) {
   });
 
   // ---- Connection control ----
-  app.get("/api/connection", (req, res) => {
-    res.json(getConnectionState());
-  });
+  app.get("/api/connection", (req, res) => res.json(getConnectionState()));
 
   app.post("/api/connection/start", (req, res) => {
     const { tiktokUsername } = req.body;
-    if (!tiktokUsername) {
+    if (!tiktokUsername)
       return res.status(400).json({ error: "tiktokUsername is required" });
-    }
 
     const current = getConnectionState();
-    if (current.isLive) {
+    if (current.isLive)
       return res.status(409).json({ error: "Already connected. Stop the current connection first." });
-    }
 
     startStream(tiktokUsername);
     res.json({ started: true, tiktokUsername });
@@ -117,9 +115,7 @@ export function startApiServer({ startStream, stopStream, broadcast }) {
   // ---- Manual speak ----
   app.post("/api/speak", (req, res) => {
     const { text } = req.body;
-    if (!text) {
-      return res.status(400).json({ error: "text is required" });
-    }
+    if (!text) return res.status(400).json({ error: "text is required" });
     broadcast({ type: "speak", text });
     res.json({ spoken: true });
   });
@@ -128,8 +124,6 @@ export function startApiServer({ startStream, stopStream, broadcast }) {
     res.status(404).json({ error: "Not found" });
   });
 
-  // Return the http.Server (not just the Express app) so wsServer can
-  // attach to it and share the same port.
   const httpServer = app.listen(config.httpPort, () => {
     console.log(`API server listening on http://localhost:${config.httpPort}`);
   });
