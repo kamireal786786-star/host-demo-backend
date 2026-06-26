@@ -9,8 +9,9 @@ export const config = {
   geminiApiKey: process.env.GEMINI_API_KEY,
   geminiModel: process.env.GEMINI_MODEL || "gemini-2.0-flash",
 
-  // HeyGen
+  // HeyGen / LiveAvatar
   heygenApiKey: process.env.HEYGEN_API_KEY,
+  heygenAvatarId: process.env.HEYGEN_AVATAR_ID,
 
   // Ports — Railway injects PORT automatically
   httpPort: parseInt(process.env.PORT || process.env.HTTP_PORT || "3000", 10),
@@ -23,6 +24,7 @@ export function validateConfig() {
   const missing = [];
   if (!config.geminiApiKey) missing.push("GEMINI_API_KEY");
   if (!config.heygenApiKey) missing.push("HEYGEN_API_KEY");
+  if (!config.heygenAvatarId) missing.push("HEYGEN_AVATAR_ID");
 
   if (missing.length > 0) {
     console.error(`Missing required environment variables: ${missing.join(", ")}`);

@@ -29,23 +29,44 @@ export function startApiServer({ startStream, stopStream, broadcast }) {
     res.json(getFullState());
   });
 
-  // ---- HeyGen token (keeps API key server-side) ----
+  // ---- LiveAvatar session token (keeps API key server-side) ----
+  // Creates a FULL mode session and returns the session token to the frontend.
   app.post("/api/heygen-token", async (req, res) => {
     if (!config.heygenApiKey) {
       return res.status(500).json({ error: "HEYGEN_API_KEY not set on server" });
     }
+    if (!config.heygenAvatarId) {
+      return res.status(500).json({ error: "HEYGEN_AVATAR_ID not set on server" });
+    }
     try {
-      const response = await fetch("https://api.heygen.com/v1/streaming.create_token", {
+      const response = await fetch("https://api.liveavatar.com/v1/sessions/token", {
         method: "POST",
-        headers: { "x-api-key": config.heygenApiKey },
+        headers: {
+          "X-API-KEY": config.heygenApiKey,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          mode: "FULL",
+          avatar_id: config.heygenAvatarId,
+          avatar_persona: {
+            language: "en",
+          },
+        }),
       });
+
       const data = await response.json();
-      if (!response.ok || !data?.data?.token) {
-        return res.status(502).json({ error: "HeyGen token request failed", detail: data });
+
+      if (!response.ok || data.code !== 100) {
+        return res.status(502).json({ error: "LiveAvatar token request failed", detail: data });
       }
-      res.json({ token: data.data.token });
+
+      // Return both session_id and session_token to frontend
+      res.json({
+        sessionToken: data.data.session_token,
+        sessionId: data.data.session_id,
+      });
     } catch (err) {
-      res.status(502).json({ error: "Failed to reach HeyGen API", detail: err.message });
+      res.status(502).json({ error: "Failed to reach LiveAvatar API", detail: err.message });
     }
   });
 
