@@ -51,6 +51,7 @@ export function startApiServer({ startStream, stopStream, broadcast }) {
           avatar_persona: {
             language: "en",
           },
+          quality: "low",
         }),
       });
 
