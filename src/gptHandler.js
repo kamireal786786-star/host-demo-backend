@@ -154,6 +154,11 @@ async function callGemini(userPrompt) {
         maxOutputTokens: 60,
         temperature: 0.7,
         topP: 0.9,
+        // gemini-2.5-flash has "thinking" on by default, and thinking tokens
+        // count against maxOutputTokens — with a small budget like this, the
+        // model can burn it all on invisible reasoning and return empty text
+        // with no error. We don't need reasoning for a short chat reply.
+        thinkingConfig: { thinkingBudget: 0 },
       },
     });
     return (result.text || "").trim();
@@ -175,14 +180,15 @@ export async function testGeminiConnection() {
     const result = await ai.models.generateContent({
       model: config.geminiModel,
       contents: [{ role: "user", parts: [{ text: "Reply with the word OK." }] }],
-      config: { maxOutputTokens: 10 },
+      config: { maxOutputTokens: 10, thinkingConfig: { thinkingBudget: 0 } },
     });
     const text = (result.text || "").trim();
     if (text) {
       console.log(`Gemini self-test OK (model: ${config.geminiModel}) — sample reply: "${text}"`);
       return true;
     }
-    console.error(`Gemini self-test FAILED — model "${config.geminiModel}" returned an empty response. Comment replies will fall back to generic lines until this is fixed.`);
+    const finishReason = result.candidates?.[0]?.finishReason;
+    console.error(`Gemini self-test FAILED — model "${config.geminiModel}" returned an empty response (finishReason: ${finishReason || "unknown"}). Comment replies will fall back to generic lines until this is fixed.`);
     return false;
   } catch (err) {
     console.error(`Gemini self-test FAILED — model "${config.geminiModel}" errored: ${err?.message || err}. Check GEMINI_API_KEY and GEMINI_MODEL. Comment replies will fall back to generic lines until this is fixed.`);
