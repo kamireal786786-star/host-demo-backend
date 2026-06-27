@@ -12,50 +12,73 @@ function buildSystemPrompt() {
   const product = getProduct();
   const ai = getAiInstructions();
 
-  return `You are a warm, natural live host on TikTok selling one product. You speak like a real person — not a robot, not a script reader.
+  return `You are a TikTok Live seller hosting a product show. You speak naturally like a real human seller — warm, energetic, convincing.
 
-Product:
+Product you are selling:
 - Name: ${product.name}
 - Features: ${product.features}
 - Price: ${product.price}
 - Shipping: ${product.shipping}
 
-Personality: ${ai.personality}
+Your personality: ${ai.personality}
 ${ai.extraRules ? `Additional rules: ${ai.extraRules}` : ""}
 
-HOW TO SPEAK:
-- Use natural filler transitions: "so", "you know", "honestly", "I mean", "look"
-- Vary your sentence length — short punchy ones mixed with longer flowing ones
-- Occasionally pause mid-thought with "..." to sound like you're thinking
-- Sound genuinely excited, not performatively excited
-- Never list features robotically — weave them into natural sentences
-- Respond to comments like a real person would in conversation, not like a customer service bot
-- Keep every response under 35 words — you are speaking out loud
-- Never use emojis, hashtags, bullet points, or markdown
-- Never say "as an AI" or break character
-- This is a fixed price item — there is no bidding, no auction. The price is set.`;
+STRICT RULES:
+- Always write COMPLETE sentences. Never cut off mid-sentence.
+- Keep responses between 15 and 30 words — no more, no less.
+- Speak in complete thoughts that make sense on their own.
+- No emojis, hashtags, bullet points, or markdown.
+- Never say "as an AI" or break character.
+- This is a fixed price item — not an auction.
+- Sound like a real person, not a robot reading a script.`;
+}
+
+const IDLE_SCRIPTS = [
+  (p) => `Welcome everyone just joining! I'm here showing off the ${p.name} — honestly one of my favorite products right now. Stick around!`,
+  (p) => `So the ${p.name} — what makes it special is ${p.features.split(',')[0].trim().toLowerCase()}. That alone is worth it.`,
+  (p) => `Quick reminder on pricing — the ${p.name} is ${p.price}. That's a solid deal for what you're getting, trust me.`,
+  (p) => `Shipping on this is ${p.shipping}. So you're not waiting forever, which I know is the first thing everyone asks.`,
+  (p) => `If you've been on the fence about the ${p.name} — honestly just go for it. Comment below or DM me to order.`,
+  (p) => `Real talk — I've been selling this for a while and the feedback is always great. The ${p.name} just delivers every time.`,
+  (p) => `For anyone just tuning in — we've got the ${p.name} available right now at ${p.price}. Drop a comment if you want one!`,
+  (p) => `What I love about this is how easy it is to use. The ${p.name} — you'll figure it out in seconds. No learning curve at all.`,
+];
+
+let idleIndex = 0;
+
+export async function generateIdleChatter() {
+  const product = getProduct();
+
+  // Use scripted lines first — they're reliable and complete
+  if (idleIndex < IDLE_SCRIPTS.length) {
+    const line = IDLE_SCRIPTS[idleIndex % IDLE_SCRIPTS.length](product);
+    idleIndex++;
+    return line;
+  }
+
+  // After cycling through scripts, use Gemini for variety
+  idleIndex = 0; // reset so scripts cycle again after Gemini turn
+  const topics = [
+    `You're live selling the ${product.name}. Welcome new viewers and mention one key benefit naturally. Complete sentence, under 25 words.`,
+    `You're live selling the ${product.name} at ${product.price}. Remind viewers about the price in an exciting way. Complete sentence, under 25 words.`,
+    `You're live selling the ${product.name}. Create gentle urgency — tell viewers not to miss out. Complete sentence, under 25 words.`,
+  ];
+  const prompt = topics[Math.floor(Math.random() * topics.length)];
+  return callGemini(prompt);
 }
 
 export async function generateCommentResponse(username, commentText) {
-  const prompt = `Viewer "${username}" just said: "${commentText}"
+  const product = getProduct();
+  const prompt = `You are live selling the ${product.name} at ${product.price}.
 
-Respond naturally as the host — like you'd reply to a friend who just asked you something mid-conversation. Keep it under 35 words.`;
+A viewer named "${username}" just commented: "${commentText}"
+
+Reply naturally as the seller — answer their question or respond to their comment. Be warm and helpful. Complete sentence, 15-30 words.`;
   return callGemini(prompt);
 }
 
-export async function generateIdleChatter(topicHint) {
-  const topics = {
-    welcome: "Welcome new viewers warmly and briefly mention what you're selling, like you're telling a friend.",
-    benefits: "Naturally bring up one specific thing you love about this product — make it feel genuine.",
-    price: "Mention the price in a way that makes it feel like great value, not a sales pitch.",
-    shipping: "Casually mention shipping like it just came to mind.",
-    urgency: "Create gentle natural urgency — like you genuinely think people should grab it.",
-    personal: "Share a tiny personal thought about the product — like why you'd use it yourself.",
-  };
-
-  const instruction = topics[topicHint] || topics.welcome;
-  const prompt = `You're live and the chat has been quiet for a moment. ${instruction} Sound completely natural, under 35 words.`;
-  return callGemini(prompt);
+export function nextIdleTopic() {
+  return "general"; // kept for compatibility, not used
 }
 
 async function callGemini(userPrompt) {
@@ -65,23 +88,18 @@ async function callGemini(userPrompt) {
       systemInstruction: buildSystemPrompt(),
       contents: [{ role: "user", parts: [{ text: userPrompt }] }],
       generationConfig: {
-        maxOutputTokens: 80,
-        temperature: 1.0,
-        topP: 0.95,
+        maxOutputTokens: 60,
+        temperature: 0.85,
+        topP: 0.9,
       },
     });
-    return result.response.text().trim();
+    const text = result.response.text().trim();
+    // Safety check — if response looks cut off (no sentence-ending punctuation), add a period
+    const lastChar = text[text.length - 1];
+    if (!['.', '!', '?'].includes(lastChar)) return text + '.';
+    return text;
   } catch (err) {
     console.error("Gemini API error:", err.message);
-    return "Sorry, give me just a second...";
+    return null; // return null so caller can skip speaking instead of saying error text
   }
-}
-
-const IDLE_TOPICS = ["welcome", "benefits", "price", "shipping", "urgency", "personal"];
-let idleTopicIndex = 0;
-
-export function nextIdleTopic() {
-  const topic = IDLE_TOPICS[idleTopicIndex % IDLE_TOPICS.length];
-  idleTopicIndex++;
-  return topic;
 }

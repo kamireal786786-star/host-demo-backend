@@ -3,7 +3,7 @@ import { startTikTokListener } from "./tiktokListener.js";
 import { startWebSocketServer } from "./wsServer.js";
 import { startApiServer } from "./apiServer.js";
 import { setConnectionState } from "./store.js";
-import { generateCommentResponse, generateIdleChatter, nextIdleTopic } from "./gptHandler.js";
+import { generateCommentResponse, generateIdleChatter } from "./gptHandler.js";
 import { IdleTalkManager } from "./idleTalk.js";
 
 validateConfig();
@@ -14,14 +14,15 @@ let activeConnection = null;
 // ─── Speech queue ──────────────────────────────────────────────────────────
 const speechQueue = [];
 let isSpeaking = false;
-const WORDS_PER_SECOND = 2.8;
+const WORDS_PER_SECOND = 2.5;
 
 function estimateDuration(text) {
   const words = text.split(/\s+/).length;
-  return Math.max((words / WORDS_PER_SECOND) * 1000, 1500);
+  return Math.max((words / WORDS_PER_SECOND) * 1000, 2000);
 }
 
 function speak(text) {
+  if (!text) return; // skip null responses (Gemini errors)
   speechQueue.push(text);
   processQueue();
 }
@@ -35,18 +36,19 @@ function processQueue() {
   setTimeout(() => {
     isSpeaking = false;
     processQueue();
-  }, estimateDuration(text) + 600);
+  }, estimateDuration(text) + 800);
 }
 
 // ─── Comment handler ───────────────────────────────────────────────────────
-async function handleComment({ username, comment }) {
+export async function handleComment({ username, comment }) {
   idleManager.notifyActivity();
   broadcast({ type: "comment", username, comment });
+  console.log(`[COMMENT] ${username}: ${comment}`);
   try {
     const response = await generateCommentResponse(username, comment);
     speak(response);
   } catch (err) {
-    console.error("Comment response generation failed:", err.message);
+    console.error("Comment response failed:", err.message);
   }
 }
 
@@ -55,11 +57,10 @@ const idleManager = new IdleTalkManager({
   onSpeak: async () => {
     if (isSpeaking || speechQueue.length > 0) return;
     try {
-      const topic = nextIdleTopic();
-      const text = await generateIdleChatter(topic);
+      const text = await generateIdleChatter();
       speak(text);
     } catch (err) {
-      console.error("Idle chatter generation failed:", err.message);
+      console.error("Idle chatter failed:", err.message);
     }
   },
 });
@@ -72,8 +73,6 @@ const httpServer = startApiServer({
   handleComment,
 });
 
-// Idle chatter only runs when at least one frontend client is connected.
-// Saves Gemini API calls when no one is watching.
 const { broadcast: realBroadcast } = startWebSocketServer(httpServer, {
   onClientConnect: () => {
     console.log("Live view opened — starting idle chatter.");
@@ -88,7 +87,7 @@ const { broadcast: realBroadcast } = startWebSocketServer(httpServer, {
 });
 broadcast = realBroadcast;
 
-console.log("AI TikTok Live Host running. Idle chatter starts when live view is opened.");
+console.log("AI TikTok Live Host running.");
 
 // ─── TikTok connection ─────────────────────────────────────────────────────
 function startStream(tiktokUsername) {
