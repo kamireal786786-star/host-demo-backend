@@ -1,30 +1,23 @@
 import { WebSocketServer } from "ws";
 
 /**
- * Attaches the WebSocket server to an existing Node http.Server so both
- * HTTP (REST API) and WS share the same port — required for Railway which
- * only exposes one public port per service.
- *
- * Message types sent to frontend:
- *   { type: "speak", text: "..." }
- *   { type: "bidUpdate", currentBid, currentBidder, totalBids }
- *   { type: "comment", username, comment }
- *   { type: "connectionStatus", isLive, roomId, lastError }
- *   { type: "stateChanged", section, data }
- *
- * @param {import("http").Server} httpServer - the server returned by app.listen()
+ * Attaches WebSocket server to the existing HTTP server.
+ * Calls onClientConnect / onClientDisconnect so server.js
+ * can start/stop idle chatter based on whether anyone is watching.
  */
-export function startWebSocketServer(httpServer) {
+export function startWebSocketServer(httpServer, { onClientConnect, onClientDisconnect } = {}) {
   const wss = new WebSocketServer({ server: httpServer });
   const clients = new Set();
 
   wss.on("connection", (ws) => {
     clients.add(ws);
     console.log(`Frontend connected. Total clients: ${clients.size}`);
+    if (clients.size === 1) onClientConnect?.(); // first client connected
 
     ws.on("close", () => {
       clients.delete(ws);
       console.log(`Frontend disconnected. Total clients: ${clients.size}`);
+      if (clients.size === 0) onClientDisconnect?.(); // last client left
     });
 
     ws.on("error", (err) => {

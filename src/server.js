@@ -38,7 +38,7 @@ function processQueue() {
   }, estimateDuration(text) + 600);
 }
 
-// ─── Comment handler (used by both TikTok and test-comment endpoint) ───────
+// ─── Comment handler ───────────────────────────────────────────────────────
 async function handleComment({ username, comment }) {
   idleManager.notifyActivity();
   broadcast({ type: "comment", username, comment });
@@ -69,15 +69,26 @@ const httpServer = startApiServer({
   startStream,
   stopStream,
   broadcast: (msg) => broadcast(msg),
-  handleComment,  // passed so /api/test-comment can use the same pipeline
+  handleComment,
 });
 
-const { broadcast: realBroadcast } = startWebSocketServer(httpServer);
+// Idle chatter only runs when at least one frontend client is connected.
+// Saves Gemini API calls when no one is watching.
+const { broadcast: realBroadcast } = startWebSocketServer(httpServer, {
+  onClientConnect: () => {
+    console.log("Live view opened — starting idle chatter.");
+    idleManager.start();
+  },
+  onClientDisconnect: () => {
+    console.log("No clients connected — pausing idle chatter.");
+    idleManager.stop();
+    speechQueue.length = 0;
+    isSpeaking = false;
+  },
+});
 broadcast = realBroadcast;
 
-// Start idle chatter immediately — avatar talks as soon as live view opens
-idleManager.start();
-console.log("AI TikTok Live Host running. Idle chatter active.");
+console.log("AI TikTok Live Host running. Idle chatter starts when live view is opened.");
 
 // ─── TikTok connection ─────────────────────────────────────────────────────
 function startStream(tiktokUsername) {
@@ -105,8 +116,6 @@ function startStream(tiktokUsername) {
 
 function stopStream() {
   if (activeConnection) { activeConnection.disconnect?.(); activeConnection = null; }
-  speechQueue.length = 0;
-  isSpeaking = false;
   const state = setConnectionState({ isLive: false, roomId: null, lastError: null, tiktokUsername: null });
   broadcast({ type: "connectionStatus", ...state });
 }
