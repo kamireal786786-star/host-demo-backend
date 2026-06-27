@@ -25,26 +25,18 @@ broadcast = realBroadcast;
 
 let activeConnection = null;
 
-// ─── Speech queue ───────────────────────────────────────────────────────────
-// Ensures the avatar finishes one thing before starting the next.
-// Comments from chat are pushed to the queue; they never interrupt mid-speech.
-// Idle chatter is only spoken when the queue is empty.
-
+// ─── Speech queue ─────────────────────────────────────────────────────────
 const speechQueue = [];
 let isSpeaking = false;
-const WORDS_PER_SECOND = 2.8; // average spoken words per second
+const WORDS_PER_SECOND = 2.8;
 
 function estimateDuration(text) {
   const words = text.split(/\s+/).length;
-  return Math.max((words / WORDS_PER_SECOND) * 1000, 1500); // min 1.5s
+  return Math.max((words / WORDS_PER_SECOND) * 1000, 1500);
 }
 
-function speak(text, priority = "normal") {
-  if (priority === "high") {
-    speechQueue.unshift(text);
-  } else {
-    speechQueue.push(text);
-  }
+function speak(text) {
+  speechQueue.push(text);
   processQueue();
 }
 
@@ -54,20 +46,17 @@ function processQueue() {
   isSpeaking = true;
   console.log(`[AVATAR SAYS] ${text}`);
   broadcast({ type: "speak", text });
-  // Wait estimated duration before allowing next item
   setTimeout(() => {
     isSpeaking = false;
     processQueue();
-  }, estimateDuration(text) + 500); // +500ms buffer between lines
+  }, estimateDuration(text) + 600);
 }
 
-function broadcastBidState() {
-  broadcast({ type: "bidUpdate", ...getBidState() });
-}
-
+// ─── Idle chatter ──────────────────────────────────────────────────────────
+// Starts immediately on backend boot so avatar is never silent.
+// Works whether or not TikTok is connected.
 const idleManager = new IdleTalkManager({
   onSpeak: async () => {
-    // Only speak idle chatter when queue is empty and not currently speaking
     if (isSpeaking || speechQueue.length > 0) return;
     try {
       const topic = nextIdleTopic();
@@ -79,11 +68,15 @@ const idleManager = new IdleTalkManager({
   },
 });
 
+// Start idle chatter immediately — avatar talks as soon as frontend loads
+idleManager.start();
+console.log("Idle chatter started — avatar will speak when live view is open.");
+
+// ─── Comment handler ───────────────────────────────────────────────────────
 async function handleComment({ username, comment }) {
   idleManager.notifyActivity();
   broadcast({ type: "comment", username, comment });
 
-  // Generate response and push to queue — never interrupts current speech
   try {
     const response = await generateCommentResponse(username, comment);
     speak(response);
@@ -92,6 +85,7 @@ async function handleComment({ username, comment }) {
   }
 }
 
+// ─── TikTok connection ─────────────────────────────────────────────────────
 function startStream(tiktokUsername) {
   if (activeConnection) {
     console.warn("startStream called while a connection is already active — ignoring.");
@@ -106,7 +100,6 @@ function startStream(tiktokUsername) {
     onConnected: (roomId) => {
       const state = setConnectionState({ isLive: true, roomId, lastError: null });
       broadcast({ type: "connectionStatus", ...state });
-      idleManager.start();
     },
     onDisconnected: () => {
       const state = setConnectionState({ isLive: false });
@@ -125,14 +118,12 @@ function stopStream() {
     activeConnection.disconnect?.();
     activeConnection = null;
   }
-  idleManager.stop();
   speechQueue.length = 0;
   isSpeaking = false;
   const state = setConnectionState({ isLive: false, roomId: null, lastError: null, tiktokUsername: null });
   broadcast({ type: "connectionStatus", ...state });
+  // Keep idle chatter running even after stopping TikTok
 }
 
-startApiServer({ startStream, stopStream, broadcast: (msg) => broadcast(msg) });
-
 console.log("AI TikTok Live Host backend running.");
-console.log("Waiting for the dashboard to call POST /api/connection/start to go live...");
+console.log("Avatar will start talking automatically when the live view is opened.");
