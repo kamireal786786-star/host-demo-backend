@@ -1,16 +1,12 @@
-import { GoogleGenerativeAI } from "@google/generative-ai";
+import { GoogleGenAI } from "@google/genai";
 import { config } from "./config.js";
 import { getProduct, getAiInstructions } from "./store.js";
 
-const genAI = new GoogleGenerativeAI(config.geminiApiKey);
-
-function getModel() {
-  return genAI.getGenerativeModel({ model: config.geminiModel });
-}
+const ai = new GoogleGenAI({ apiKey: config.geminiApiKey });
 
 function buildSystemPrompt() {
   const product = getProduct();
-  const ai = getAiInstructions();
+  const aiInstructions = getAiInstructions();
   return `You are a TikTok Live seller hosting a livestream right now.
 
 PRODUCT FACTS (use these — don't make anything up beyond them):
@@ -19,8 +15,8 @@ PRODUCT FACTS (use these — don't make anything up beyond them):
 - Features/details: ${product.features}
 - Shipping: ${product.shipping}
 
-Personality: ${ai.personality}.
-${ai.extraRules ? ai.extraRules : ""}
+Personality: ${aiInstructions.personality}.
+${aiInstructions.extraRules ? aiInstructions.extraRules : ""}
 
 How to respond to viewer comments:
 - Actually answer the specific thing the viewer asked or said — don't just repeat generic hype.
@@ -150,19 +146,46 @@ async function callGeminiWithRetry(userPrompt) {
 
 async function callGemini(userPrompt) {
   try {
-    const model = getModel();
-    const result = await model.generateContent({
-      systemInstruction: buildSystemPrompt(),
+    const result = await ai.models.generateContent({
+      model: config.geminiModel,
       contents: [{ role: "user", parts: [{ text: userPrompt }] }],
-      generationConfig: {
+      config: {
+        systemInstruction: buildSystemPrompt(),
         maxOutputTokens: 60,
         temperature: 0.7,
         topP: 0.9,
       },
     });
-    return result.response.text().trim();
+    return (result.text || "").trim();
   } catch (err) {
-    console.error("Gemini API error:", err.message);
+    console.error("Gemini API error:", err?.message || err);
     return null;
+  }
+}
+
+// ─── Startup self-test ──────────────────────────────────────────────────────
+// The Gemini SDK/model/key can silently break (wrong model name, expired key,
+// quota, deprecated SDK version, etc.) and the failure mode looks identical
+// to "comments are getting ignored" from the outside — every comment quietly
+// falls back to the safe generic line with no obvious error in the stream.
+// Call this once at boot so a broken setup shows up immediately in the logs
+// instead of being discovered live.
+export async function testGeminiConnection() {
+  try {
+    const result = await ai.models.generateContent({
+      model: config.geminiModel,
+      contents: [{ role: "user", parts: [{ text: "Reply with the word OK." }] }],
+      config: { maxOutputTokens: 10 },
+    });
+    const text = (result.text || "").trim();
+    if (text) {
+      console.log(`Gemini self-test OK (model: ${config.geminiModel}) — sample reply: "${text}"`);
+      return true;
+    }
+    console.error(`Gemini self-test FAILED — model "${config.geminiModel}" returned an empty response. Comment replies will fall back to generic lines until this is fixed.`);
+    return false;
+  } catch (err) {
+    console.error(`Gemini self-test FAILED — model "${config.geminiModel}" errored: ${err?.message || err}. Check GEMINI_API_KEY and GEMINI_MODEL. Comment replies will fall back to generic lines until this is fixed.`);
+    return false;
   }
 }

@@ -7,7 +7,7 @@ export const config = {
 
   // Gemini
   geminiApiKey: process.env.GEMINI_API_KEY,
-  geminiModel: process.env.GEMINI_MODEL || "gemini-2.0-flash",
+  geminiModel: process.env.GEMINI_MODEL || "gemini-2.5-flash",
 
   // HeyGen / LiveAvatar
   heygenApiKey: process.env.HEYGEN_API_KEY,

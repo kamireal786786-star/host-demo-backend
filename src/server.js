@@ -3,7 +3,7 @@ import { startTikTokListener } from "./tiktokListener.js";
 import { startWebSocketServer } from "./wsServer.js";
 import { startApiServer } from "./apiServer.js";
 import { setConnectionState } from "./store.js";
-import { generateCommentResponse, generateIdleChatter } from "./gptHandler.js";
+import { generateCommentResponse, generateIdleChatter, testGeminiConnection } from "./gptHandler.js";
 import { IdleTalkManager } from "./idleTalk.js";
 
 validateConfig();
@@ -94,6 +94,7 @@ const { broadcast: realBroadcast } = startWebSocketServer(httpServer, {
 broadcast = realBroadcast;
 
 console.log("AI TikTok Live Host running.");
+testGeminiConnection();
 
 // ─── TikTok connection ─────────────────────────────────────────────────────
 function startStream(tiktokUsername) {
