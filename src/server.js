@@ -17,13 +17,13 @@ let isSpeaking = false;
 const WORDS_PER_SECOND = 2.5;
 
 function estimateDuration(text) {
-  const words = text.split(/\s+/).length;
+  const words = text.trim().split(/\s+/).length;
   return Math.max((words / WORDS_PER_SECOND) * 1000, 2000);
 }
 
 function speak(text) {
-  if (!text) return; // skip null responses (Gemini errors)
-  speechQueue.push(text);
+  if (!text || text.trim().length < 5) return;
+  speechQueue.push(text.trim());
   processQueue();
 }
 
@@ -36,14 +36,19 @@ function processQueue() {
   setTimeout(() => {
     isSpeaking = false;
     processQueue();
-  }, estimateDuration(text) + 800);
+  }, estimateDuration(text) + 1000); // +1s gap between lines
 }
 
 // ─── Comment handler ───────────────────────────────────────────────────────
 export async function handleComment({ username, comment }) {
+  // Suppress idle chatter for longer after a real comment
   idleManager.notifyActivity();
   broadcast({ type: "comment", username, comment });
   console.log(`[COMMENT] ${username}: ${comment}`);
+
+  // Clear any queued idle lines so comment response comes next
+  speechQueue.length = 0;
+
   try {
     const response = await generateCommentResponse(username, comment);
     speak(response);
@@ -55,6 +60,7 @@ export async function handleComment({ username, comment }) {
 // ─── Idle chatter ──────────────────────────────────────────────────────────
 const idleManager = new IdleTalkManager({
   onSpeak: async () => {
+    // Don't fire idle if avatar is currently speaking or queue has items
     if (isSpeaking || speechQueue.length > 0) return;
     try {
       const text = await generateIdleChatter();

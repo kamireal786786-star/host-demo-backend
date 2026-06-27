@@ -11,75 +11,66 @@ function getModel() {
 function buildSystemPrompt() {
   const product = getProduct();
   const ai = getAiInstructions();
-
-  return `You are a TikTok Live seller hosting a product show. You speak naturally like a real human seller — warm, energetic, convincing.
-
-Product you are selling:
-- Name: ${product.name}
-- Features: ${product.features}
-- Price: ${product.price}
-- Shipping: ${product.shipping}
-
-Your personality: ${ai.personality}
-${ai.extraRules ? `Additional rules: ${ai.extraRules}` : ""}
-
-STRICT RULES:
-- Always write COMPLETE sentences. Never cut off mid-sentence.
-- Keep responses between 15 and 30 words — no more, no less.
-- Speak in complete thoughts that make sense on their own.
-- No emojis, hashtags, bullet points, or markdown.
-- Never say "as an AI" or break character.
-- This is a fixed price item — not an auction.
-- Sound like a real person, not a robot reading a script.`;
+  return `You are a TikTok Live seller. You are selling: ${product.name} at ${product.price}.
+Product details: ${product.features}. Shipping: ${product.shipping}.
+Personality: ${ai.personality}.
+${ai.extraRules ? ai.extraRules : ""}
+Rules: Respond in 1-2 complete sentences. 15-25 words maximum. No emojis. No markdown. End with punctuation.`;
 }
 
+// ─── Scripted idle lines — reliable, complete, product-specific ────────────
 const IDLE_SCRIPTS = [
-  (p) => `Welcome everyone just joining! I'm here showing off the ${p.name} — honestly one of my favorite products right now. Stick around!`,
-  (p) => `So the ${p.name} — what makes it special is ${p.features.split(',')[0].trim().toLowerCase()}. That alone is worth it.`,
-  (p) => `Quick reminder on pricing — the ${p.name} is ${p.price}. That's a solid deal for what you're getting, trust me.`,
-  (p) => `Shipping on this is ${p.shipping}. So you're not waiting forever, which I know is the first thing everyone asks.`,
-  (p) => `If you've been on the fence about the ${p.name} — honestly just go for it. Comment below or DM me to order.`,
-  (p) => `Real talk — I've been selling this for a while and the feedback is always great. The ${p.name} just delivers every time.`,
-  (p) => `For anyone just tuning in — we've got the ${p.name} available right now at ${p.price}. Drop a comment if you want one!`,
-  (p) => `What I love about this is how easy it is to use. The ${p.name} — you'll figure it out in seconds. No learning curve at all.`,
+  (p) => `Welcome everyone! We're live showing the ${p.name} — ${p.features.split(',')[0].trim()}. Stick around!`,
+  (p) => `The ${p.name} is ${p.price}. Honestly great value for what you get — comment to order!`,
+  (p) => `Shipping on this: ${p.shipping}. So you won't be waiting long at all.`,
+  (p) => `Quick highlight — ${p.features.split(',')[1]?.trim() || p.features.split(',')[0].trim()}. That's what makes the ${p.name} stand out.`,
+  (p) => `If you're thinking about it, don't wait. The ${p.name} is available right now at ${p.price}.`,
+  (p) => `Over a thousand five-star reviews on this one. The ${p.name} just works — people love it.`,
+  (p) => `Drop a comment or DM if you want to order the ${p.name}. Happy to answer any questions too!`,
+  (p) => `${p.features.split(',')[2]?.trim() || 'Sugar free and vegan'} — and it tastes great too. The ${p.name} is the real deal.`,
 ];
 
 let idleIndex = 0;
 
 export async function generateIdleChatter() {
   const product = getProduct();
-
-  // Use scripted lines first — they're reliable and complete
-  if (idleIndex < IDLE_SCRIPTS.length) {
-    const line = IDLE_SCRIPTS[idleIndex % IDLE_SCRIPTS.length](product);
-    idleIndex++;
-    return line;
-  }
-
-  // After cycling through scripts, use Gemini for variety
-  idleIndex = 0; // reset so scripts cycle again after Gemini turn
-  const topics = [
-    `You're live selling the ${product.name}. Welcome new viewers and mention one key benefit naturally. Complete sentence, under 25 words.`,
-    `You're live selling the ${product.name} at ${product.price}. Remind viewers about the price in an exciting way. Complete sentence, under 25 words.`,
-    `You're live selling the ${product.name}. Create gentle urgency — tell viewers not to miss out. Complete sentence, under 25 words.`,
-  ];
-  const prompt = topics[Math.floor(Math.random() * topics.length)];
-  return callGemini(prompt);
+  const line = IDLE_SCRIPTS[idleIndex % IDLE_SCRIPTS.length](product);
+  idleIndex++;
+  return line;
 }
 
+// ─── Comment responses — Gemini handles these ─────────────────────────────
 export async function generateCommentResponse(username, commentText) {
   const product = getProduct();
-  const prompt = `You are live selling the ${product.name} at ${product.price}.
 
-A viewer named "${username}" just commented: "${commentText}"
+  // Handle common questions directly without Gemini (faster + more reliable)
+  const lower = commentText.toLowerCase().trim();
 
-Reply naturally as the seller — answer their question or respond to their comment. Be warm and helpful. Complete sentence, 15-30 words.`;
+  if (lower.match(/\bprice\b|\bhow much\b|\bcost\b|\bpkr\b|\bkitna\b/)) {
+    return `Great question! The ${product.name} is ${product.price}. Comment to place your order right now!`;
+  }
+  if (lower.match(/\bship\b|\bdelivery\b|\bdeliver\b|\bhow long\b|\bkab\b/)) {
+    return `Shipping is ${product.shipping}. We deliver fast — comment to order!`;
+  }
+  if (lower.match(/\bwhat is\b|\bwhat's this\b|\bkya hai\b|\bkya h\b/)) {
+    return `This is the ${product.name} — ${product.features.split(',')[0].trim()}. Amazing product at ${product.price}!`;
+  }
+  if (lower.match(/\bhow to order\b|\border\b|\bbuy\b|\bkaise\b|\bkhareed\b/)) {
+    return `To order the ${product.name}, just comment your details or send a DM! Price is ${product.price}.`;
+  }
+  if (lower.match(/\bingredient\b|\bwhat's in\b|\bcontain\b/)) {
+    return `${product.name} contains ${product.features.split('.')[0]}. All clean, natural ingredients!`;
+  }
+
+  // Fall back to Gemini for other questions
+  const prompt = `A viewer named "${username}" commented: "${commentText}"
+
+You are selling ${product.name} at ${product.price}. Respond directly and helpfully to what they said. One or two sentences, under 25 words, end with punctuation.`;
+
   return callGemini(prompt);
 }
 
-export function nextIdleTopic() {
-  return "general"; // kept for compatibility, not used
-}
+export function nextIdleTopic() { return "general"; }
 
 async function callGemini(userPrompt) {
   try {
@@ -88,18 +79,18 @@ async function callGemini(userPrompt) {
       systemInstruction: buildSystemPrompt(),
       contents: [{ role: "user", parts: [{ text: userPrompt }] }],
       generationConfig: {
-        maxOutputTokens: 60,
-        temperature: 0.85,
+        maxOutputTokens: 50,
+        temperature: 0.7,
         topP: 0.9,
       },
     });
     const text = result.response.text().trim();
-    // Safety check — if response looks cut off (no sentence-ending punctuation), add a period
+    if (!text || text.length < 5) return null;
     const lastChar = text[text.length - 1];
     if (!['.', '!', '?'].includes(lastChar)) return text + '.';
     return text;
   } catch (err) {
     console.error("Gemini API error:", err.message);
-    return null; // return null so caller can skip speaking instead of saying error text
+    return null;
   }
 }
