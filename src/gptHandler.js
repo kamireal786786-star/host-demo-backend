@@ -11,11 +11,22 @@ function getModel() {
 function buildSystemPrompt() {
   const product = getProduct();
   const ai = getAiInstructions();
-  return `You are a TikTok Live seller. You are selling: ${product.name} at ${product.price}.
-Product details: ${product.features}. Shipping: ${product.shipping}.
+  return `You are a TikTok Live seller hosting a livestream right now.
+
+PRODUCT FACTS (use these — don't make anything up beyond them):
+- Name: ${product.name}
+- Price: ${product.price}
+- Features/details: ${product.features}
+- Shipping: ${product.shipping}
+
 Personality: ${ai.personality}.
 ${ai.extraRules ? ai.extraRules : ""}
-Rules: Respond in 1-2 complete sentences. 15-25 words maximum. No emojis. No markdown. End with punctuation.`;
+
+How to respond to viewer comments:
+- Actually answer the specific thing the viewer asked or said — don't just repeat generic hype.
+- If they ask something the product facts above don't cover (e.g. a very specific certification, allergy detail, exact delivery date), be honest that you don't have that exact detail, invite them to comment/DM for more, and steer back to the product.
+- If it's not a question (e.g. "great product", a compliment, a joke), react naturally to it — don't just dump product info.
+- 1-2 complete sentences, 10-25 words. No emojis. No markdown. Always end with proper punctuation (. ! or ?).`;
 }
 
 // ─── Scripted idle lines — reliable, complete, product-specific ────────────
@@ -39,38 +50,103 @@ export async function generateIdleChatter() {
   return line;
 }
 
-// ─── Comment responses — Gemini handles these ─────────────────────────────
+// ─── Comment responses ─────────────────────────────────────────────────────
+//
+// Strategy: only the handful of intents where an instant, perfectly
+// consistent, on-brand answer matters more than "understanding" stay
+// hardcoded (price, how-to-order). Everything else — shipping, ingredients,
+// safety, reactions, off-script questions, typos, Roman Urdu, whatever a
+// viewer types — goes to Gemini, which actually reads the comment and
+// answers it using the real product facts. If Gemini ever fails or returns
+// something low-quality, we retry once, then fall back to a safe line that
+// still engages the viewer — a comment should never get silently ignored.
+
+const FAST_PATHS = [
+  {
+    name: "price",
+    test: (lower) => /\b(price|cost|kitna)\b/.test(lower) || /\bpkr\b/.test(lower) || /how much( is|'s)?\s*(it|this|that)?\s*$/.test(lower),
+    reply: (product) =>
+      `Great question! The ${product.name} is ${product.price}. Comment to place your order right now!`,
+  },
+  {
+    name: "order",
+    test: (lower) => /\b(how (do|to) (i|you)? ?(order|buy)|wanna buy|want to buy|kaise khareed|how to order)\b/.test(lower),
+    reply: (product) =>
+      `To order the ${product.name}, just comment your details or send a DM! Price is ${product.price}.`,
+  },
+];
+
 export async function generateCommentResponse(username, commentText) {
   const product = getProduct();
-
-  // Handle common questions directly without Gemini (faster + more reliable)
   const lower = commentText.toLowerCase().trim();
 
-  if (lower.match(/\bprice\b|\bhow much\b|\bcost\b|\bpkr\b|\bkitna\b/)) {
-    return `Great question! The ${product.name} is ${product.price}. Comment to place your order right now!`;
-  }
-  if (lower.match(/\bship\b|\bdelivery\b|\bdeliver\b|\bhow long\b|\bkab\b/)) {
-    return `Shipping is ${product.shipping}. We deliver fast — comment to order!`;
-  }
-  if (lower.match(/\bwhat is\b|\bwhat's this\b|\bkya hai\b|\bkya h\b/)) {
-    return `This is the ${product.name} — ${product.features.split(',')[0].trim()}. Amazing product at ${product.price}!`;
-  }
-  if (lower.match(/\bhow to order\b|\border\b|\bbuy\b|\bkaise\b|\bkhareed\b/)) {
-    return `To order the ${product.name}, just comment your details or send a DM! Price is ${product.price}.`;
-  }
-  if (lower.match(/\bingredient\b|\bwhat's in\b|\bcontain\b/)) {
-    return `${product.name} contains ${product.features.split('.')[0]}. All clean, natural ingredients!`;
+  for (const path of FAST_PATHS) {
+    if (path.test(lower)) {
+      return path.reply(product);
+    }
   }
 
-  // Fall back to Gemini for other questions
+  // Everything else: let the model actually read and answer the comment.
   const prompt = `A viewer named "${username}" commented: "${commentText}"
 
-You are selling ${product.name} at ${product.price}. Respond directly and helpfully to what they said. One or two sentences, under 25 words, end with punctuation.`;
+Respond directly to what they said, using the product facts you were given.`;
 
-  return callGemini(prompt);
+  const aiResponse = await callGeminiWithRetry(prompt);
+  if (aiResponse) return aiResponse;
+
+  // Guaranteed fallback — never let a comment go unanswered just because
+  // the AI call failed or returned junk.
+  return safeFallback(product);
 }
 
 export function nextIdleTopic() { return "general"; }
+
+function safeFallback(product) {
+  const lines = [
+    `Great question! Drop a comment or send a DM and I'll get you all the details on the ${product.name}.`,
+    `Love the engagement! Comment below and I'll make sure you get a full answer on that.`,
+    `Good one — comment or DM me and I'll walk you through everything on the ${product.name}.`,
+  ];
+  return lines[Math.floor(Math.random() * lines.length)];
+}
+
+// ─── Quality gate ───────────────────────────────────────────────────────────
+// Rejects empty/too-short/non-answer responses (e.g. a bare "Absolutely,")
+// instead of letting them through just because they're 5+ characters.
+function isUsableResponse(text) {
+  if (!text) return false;
+  const trimmed = text.trim();
+  if (trimmed.length < 8) return false;
+  const wordCount = trimmed.split(/\s+/).filter(Boolean).length;
+  if (wordCount < 3) return false;
+  return true;
+}
+
+function finalizePunctuation(text) {
+  let cleaned = text.trim();
+  // Strip trailing commas/semicolons/dashes before adding sentence punctuation,
+  // so we never end up with something like "Absolutely,."
+  cleaned = cleaned.replace(/[,;:\-–—\s]+$/, "");
+  const lastChar = cleaned[cleaned.length - 1];
+  if (!['.', '!', '?'].includes(lastChar)) {
+    cleaned += '.';
+  }
+  return cleaned;
+}
+
+async function callGeminiWithRetry(userPrompt) {
+  for (let attempt = 0; attempt < 2; attempt++) {
+    const text = await callGemini(
+      attempt === 0
+        ? userPrompt
+        : `${userPrompt}\n\nYour previous reply wasn't usable (too short or didn't actually answer). Try again with a real, complete answer.`
+    );
+    if (isUsableResponse(text)) {
+      return finalizePunctuation(text);
+    }
+  }
+  return null;
+}
 
 async function callGemini(userPrompt) {
   try {
@@ -79,16 +155,12 @@ async function callGemini(userPrompt) {
       systemInstruction: buildSystemPrompt(),
       contents: [{ role: "user", parts: [{ text: userPrompt }] }],
       generationConfig: {
-        maxOutputTokens: 50,
+        maxOutputTokens: 60,
         temperature: 0.7,
         topP: 0.9,
       },
     });
-    const text = result.response.text().trim();
-    if (!text || text.length < 5) return null;
-    const lastChar = text[text.length - 1];
-    if (!['.', '!', '?'].includes(lastChar)) return text + '.';
-    return text;
+    return result.response.text().trim();
   } catch (err) {
     console.error("Gemini API error:", err.message);
     return null;
