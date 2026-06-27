@@ -1,23 +1,48 @@
 import { WebSocketServer } from "ws";
 
 /**
- * Attaches WebSocket server to the existing HTTP server.
- * Calls onClientConnect / onClientDisconnect so server.js
- * can start/stop idle chatter based on whether anyone is watching.
+ * Only counts "live" clients (the broadcast view) when deciding
+ * whether to start/stop idle chatter. Dashboard clients connect
+ * but don't trigger the idle chatter pipeline.
+ *
+ * Frontend sends { type: "identify", clientType: "live" | "dashboard" }
+ * as the first message after connecting.
  */
 export function startWebSocketServer(httpServer, { onClientConnect, onClientDisconnect } = {}) {
   const wss = new WebSocketServer({ server: httpServer });
-  const clients = new Set();
+  const allClients = new Set();
+  let liveClientCount = 0;
 
   wss.on("connection", (ws) => {
-    clients.add(ws);
-    console.log(`Frontend connected. Total clients: ${clients.size}`);
-    if (clients.size === 1) onClientConnect?.(); // first client connected
+    allClients.add(ws);
+    let identified = false;
+
+    ws.on("message", (data) => {
+      try {
+        const msg = JSON.parse(data);
+        if (msg.type === "identify" && !identified) {
+          identified = true;
+          ws.clientType = msg.clientType || "dashboard";
+          if (ws.clientType === "live") {
+            liveClientCount++;
+            console.log(`Live view connected. Live clients: ${liveClientCount}`);
+            if (liveClientCount === 1) onClientConnect?.();
+          } else {
+            console.log(`Dashboard connected. Total clients: ${allClients.size}`);
+          }
+        }
+      } catch {}
+    });
 
     ws.on("close", () => {
-      clients.delete(ws);
-      console.log(`Frontend disconnected. Total clients: ${clients.size}`);
-      if (clients.size === 0) onClientDisconnect?.(); // last client left
+      allClients.delete(ws);
+      if (ws.clientType === "live") {
+        liveClientCount = Math.max(0, liveClientCount - 1);
+        console.log(`Live view disconnected. Live clients: ${liveClientCount}`);
+        if (liveClientCount === 0) onClientDisconnect?.();
+      } else {
+        console.log(`Dashboard disconnected. Total clients: ${allClients.size}`);
+      }
     });
 
     ws.on("error", (err) => {
@@ -29,7 +54,7 @@ export function startWebSocketServer(httpServer, { onClientConnect, onClientDisc
 
   function broadcast(message) {
     const payload = JSON.stringify(message);
-    for (const client of clients) {
+    for (const client of allClients) {
       if (client.readyState === client.OPEN) {
         client.send(payload);
       }
