@@ -2,8 +2,9 @@ import { validateConfig } from "./config.js";
 import { startTikTokListener } from "./tiktokListener.js";
 import { startWebSocketServer } from "./wsServer.js";
 import { startApiServer } from "./apiServer.js";
-import { setConnectionState } from "./store.js";
-import { generateCommentResponse, generateIdleChatter, testGeminiConnection } from "./gptHandler.js";
+import { setConnectionState, submitBid, getBidState, getProduct } from "./store.js";
+import { parseBid } from "./bidParser.js";
+import { generateCommentResponse, generateIdleChatter, generateBidAck, testGeminiConnection } from "./gptHandler.js";
 import { IdleTalkManager } from "./idleTalk.js";
 
 validateConfig();
@@ -46,8 +47,33 @@ export async function handleComment({ username, comment }) {
   broadcast({ type: "comment", username, comment });
   console.log(`[COMMENT] ${username}: ${comment}`);
 
-  // Clear any queued idle lines so comment response comes next
+  // Clear any queued idle lines so the response (bid ack or comment reply) comes next
   speechQueue.length = 0;
+
+  // ── Bid check ──────────────────────────────────────────────────────────
+  // Comments like "100", "bid 100", "$100" are bids, not chat — handle them
+  // separately so they update bid state and don't get sent to Gemini.
+  const bidAmount = parseBid(comment);
+  if (bidAmount !== null) {
+    const result = submitBid(bidAmount, username);
+    if (result.accepted) {
+      const bidState = getBidState();
+      broadcast({ type: "bidUpdate", ...bidState });
+      console.log(`[BID] ${username} -> $${bidAmount} (accepted)`);
+      try {
+        const ack = await generateBidAck(username, bidAmount, getProduct());
+        speak(ack);
+      } catch (err) {
+        console.error("Bid ack generation failed:", err.message);
+        speak(`We've got $${bidAmount} from ${username}! Anyone going higher?`);
+      }
+    } else {
+      console.log(`[BID] ${username} -> $${bidAmount} (rejected: ${result.reason})`);
+      // Rejected bids (too low / below increment) don't interrupt the stream —
+      // a real host doesn't stop to address every under-bid, just keeps going.
+    }
+    return;
+  }
 
   try {
     const response = await generateCommentResponse(username, comment);
