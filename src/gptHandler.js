@@ -47,18 +47,19 @@ const RECENT_IDLE_MEMORY = 6;
 // Rotate through different "angles" a real host cycles through, so back-to-back
 // lines don't all sound like the same kind of sentence.
 const IDLE_ANGLES = [
-  "Hype up the product itself — what it does, why it's good. Keep it punchy.",
-  "Welcome new viewers joining the stream right now and tell them what's going on.",
-  "Mention price and that stock/time is limited, to create urgency — but don't be pushy or robotic about it.",
-  "React to the vibe of the stream like a real host would (e.g. acknowledging comments flying in, hyping engagement) without inventing specific fake comments.",
-  "Mention shipping or a practical detail a buyer would want to know.",
-  "Tell people to comment or ask questions, like you're inviting interaction.",
+  "Talk about what the product does or looks like right now — be specific and direct, like you're holding it up.",
+  "Welcome new viewers joining mid-stream and quickly catch them up on what's happening.",
+  "Create urgency — limited stock, today only, people are already buying — but say it casually not pushy.",
+  "React to the vibe of the stream, acknowledge comments flying in, energy in the chat — keep it hype.",
+  "Mention a practical detail a buyer cares about — shipping, condition, what they'll get in the box.",
+  "Invite the audience to ask questions or comment, like you're genuinely talking with them.",
+  "Tell a quick anecdote or reaction like 'my friend tried this and...' or 'I wasn't expecting it but...'",
+  "Transition out of replying mode back into selling mode — like 'anyway back to this thing...' or 'okay look...'",
 ];
 let angleIndex = 0;
 
 export async function generateIdleChatter() {
   const product = getProduct();
-  const aiInstructions = getAiInstructions();
   const angle = IDLE_ANGLES[angleIndex % IDLE_ANGLES.length];
   angleIndex++;
 
@@ -66,7 +67,10 @@ export async function generateIdleChatter() {
     ? `\n\nDon't repeat these recent lines or their sentence structure:\n${recentIdleLines.map((l) => `- "${l}"`).join("\n")}`
     : "";
 
-  const prompt = `Say one new live-stream line right now. Angle for this line: ${angle}${avoidList}\n\nOne line only, in your natural host voice — no quotation marks around it.`;
+  const prompt = `Keep the stream going. You're mid-monologue — say the next thing a live host would say right now.
+Angle: ${angle}${avoidList}
+
+One line only, natural host voice, no quotation marks. Sound like you're mid-stream, not starting fresh.`;
 
   const text = await callGemini(prompt, buildSystemPrompt());
   if (isUsableResponse(text)) {
@@ -84,68 +88,49 @@ export async function generateIdleChatter() {
 
 // ─── Bid acknowledgment ─────────────────────────────────────────────────────
 export async function generateBidAck(username, amount, product) {
-  const prompt = `A viewer named "${username}" just placed a winning bid of $${amount} on the ${product.name}, beating the previous bid. Call it out live, hype-host style — short, energetic, and inviting others to bid higher. One line, 8-18 words.`;
+  const prompt = `You're mid-stream and "${username}" just placed a bid of $${amount} on the ${product.name}. Call it out live like you just saw it — excited but natural, like "boom, we got ${username} at $${amount}!" Keep it short (8-18 words) and invite others to go higher. Sound mid-stream, not like an announcement.`;
   const text = await callGemini(prompt, buildSystemPrompt());
   if (isUsableResponse(text)) return finalizePunctuation(text);
-  return `We've got $${amount} from ${username}! Who's going higher?`;
+  return `boom — ${username} just dropped $${amount}, who's going higher than that?`;
 }
 
-// ─── Comment responses ─────────────────────────────────────────────────────
-//
-// Strategy: only the handful of intents where an instant, perfectly
-// consistent, on-brand answer matters more than "understanding" stay
-// hardcoded (price, how-to-order). Everything else — shipping, ingredients,
-// safety, reactions, off-script questions, typos, Roman Urdu, whatever a
-// viewer types — goes to Gemini, which actually reads the comment and
-// answers it using the real product facts. If Gemini ever fails or returns
-// something low-quality, we retry once, then fall back to a safe line that
-// still engages the viewer — a comment should never get silently ignored.
+// ─── Comment responses — smooth pivot style ──────────────────────────────────
+// Instead of a cold reply, the host naturally bridges from whatever they were
+// saying to addressing the comment — the way a real streamer does it.
 
 const FAST_PATHS = [
   {
     name: "price",
     test: (lower) => /\b(price|cost|kitna)\b/.test(lower) || /\bpkr\b/.test(lower) || /how much( is|'s)?\s*(it|this|that)?\s*$/.test(lower),
     reply: (product) =>
-      `Great question! The ${product.name} is ${product.price}. Comment to place your order right now!`,
+      `oh and someone's asking about price — it's ${product.price} right now, that's the deal you're getting today.`,
   },
   {
     name: "order",
     test: (lower) => /\b(how (do|to) (i|you)? ?(order|buy)|wanna buy|want to buy|kaise khareed|how to order)\b/.test(lower),
     reply: (product) =>
-      `To order the ${product.name}, just comment your details or send a DM! Price is ${product.price}.`,
+      `someone wants to know how to order — just drop a comment or DM and we'll sort you out, price is ${product.price}.`,
   },
 ];
 
-export async function generateCommentResponse(username, commentText) {
+// Generates a reply that flows naturally from the host's ongoing monologue,
+// as if they just glanced at the comment mid-sentence and pivoted to it.
+export async function generateTransition(username, commentText) {
   const product = getProduct();
   const lower = commentText.toLowerCase().trim();
 
   for (const path of FAST_PATHS) {
-    if (path.test(lower)) {
-      return path.reply(product);
-    }
+    if (path.test(lower)) return path.reply(product);
   }
 
-  // Everything else: let the model actually read and answer the comment.
-  const prompt = `A viewer named "${username}" commented: "${commentText}"
+  const prompt = `You're mid-stream and a viewer named "${username}" just commented: "${commentText}"
 
-Respond directly to what they said, using the product facts you were given.`;
+Respond naturally — like you spotted it while talking and smoothly pivoted. Use a brief connector ("oh, ${username} is asking..." / "and look, someone said..." / "actually that's a good one...") then answer it using your product facts. Keep it conversational and end back on the product or stream, not hanging. 1-2 sentences, 10-28 words.`;
 
   const aiResponse = await callGeminiWithRetry(prompt, buildSystemPrompt());
   if (aiResponse) return aiResponse;
 
-  // Guaranteed fallback — never let a comment go unanswered just because
-  // the AI call failed or returned junk.
-  return safeFallback(product);
-}
-
-function safeFallback(product) {
-  const lines = [
-    `Great question! Drop a comment or send a DM and I'll get you all the details on the ${product.name}.`,
-    `Love the engagement! Comment below and I'll make sure you get a full answer on that.`,
-    `Good one — comment or DM me and I'll walk you through everything on the ${product.name}.`,
-  ];
-  return lines[Math.floor(Math.random() * lines.length)];
+  return `oh good question from ${username} — drop a comment or DM and I'll walk you through everything on the ${product.name}.`;
 }
 
 // ─── Quality gate ───────────────────────────────────────────────────────────

@@ -4,55 +4,83 @@ import { startWebSocketServer } from "./wsServer.js";
 import { startApiServer } from "./apiServer.js";
 import { setConnectionState, submitBid, getBidState, getProduct } from "./store.js";
 import { parseBid } from "./bidParser.js";
-import { generateCommentResponse, generateIdleChatter, generateBidAck, testGeminiConnection } from "./gptHandler.js";
-import { IdleTalkManager } from "./idleTalk.js";
+import { generateCommentResponse, generateIdleChatter, generateBidAck, generateTransition, testGeminiConnection } from "./gptHandler.js";
 
 validateConfig();
 
 let broadcast = () => {};
 let activeConnection = null;
 
-// ─── Speech queue ──────────────────────────────────────────────────────────
+// ─── Speech queue ───────────────────────────────────────────────────────────
+// Each item is { text, type: 'idle' | 'comment' | 'bid' }
+// Tagging lets us remove only idle lines when a comment/bid arrives, so the
+// host always finishes its current sentence before pivoting — never cuts off.
 const speechQueue = [];
 let isSpeaking = false;
-const WORDS_PER_SECOND = 2.5;
+let isGeneratingIdle = false;
+const WORDS_PER_SECOND = 2.8;
 
 function estimateDuration(text) {
   const words = text.trim().split(/\s+/).length;
-  return Math.max((words / WORDS_PER_SECOND) * 1000, 2000);
+  return Math.max((words / WORDS_PER_SECOND) * 1000, 1500);
 }
 
-function speak(text) {
+function speak(text, type = "idle") {
   if (!text || text.trim().length < 5) return;
-  speechQueue.push(text.trim());
+  speechQueue.push({ text: text.trim(), type });
   processQueue();
 }
 
 function processQueue() {
   if (isSpeaking || speechQueue.length === 0) return;
-  const text = speechQueue.shift();
+  const { text } = speechQueue.shift();
   isSpeaking = true;
   console.log(`[AVATAR SAYS] ${text}`);
   broadcast({ type: "speak", text });
   setTimeout(() => {
     isSpeaking = false;
+    // Queue drained → keep the host talking immediately. A real streamer
+    // never goes silent; they just keep the monologue going nonstop.
+    if (speechQueue.length === 0) {
+      fillWithIdleChatter();
+    }
     processQueue();
-  }, estimateDuration(text) + 1000); // +1s gap between lines
+  }, estimateDuration(text) + 400); // 400ms breath between sentences
 }
 
-// ─── Comment handler ───────────────────────────────────────────────────────
+// Generates the next idle line and queues it. Called every time the queue
+// drains so the host talks continuously without any dead air.
+async function fillWithIdleChatter() {
+  if (isGeneratingIdle) return; // already in-flight
+  isGeneratingIdle = true;
+  try {
+    const text = await generateIdleChatter();
+    speak(text, "idle");
+  } catch (err) {
+    console.error("Idle chatter failed:", err.message);
+  } finally {
+    isGeneratingIdle = false;
+  }
+}
+
+// When a comment/bid arrives, only remove pending *idle* lines from the queue.
+// This lets the host finish its current sentence naturally, then pivot to the
+// reply — rather than going silent or cutting off mid-word.
+function clearPendingIdle() {
+  for (let i = speechQueue.length - 1; i >= 0; i--) {
+    if (speechQueue[i].type === "idle") speechQueue.splice(i, 1);
+  }
+}
+
+// ─── Comment handler ────────────────────────────────────────────────────────
 export async function handleComment({ username, comment }) {
-  // Suppress idle chatter for longer after a real comment
-  idleManager.notifyActivity();
   broadcast({ type: "comment", username, comment });
   console.log(`[COMMENT] ${username}: ${comment}`);
 
-  // Clear any queued idle lines so the response (bid ack or comment reply) comes next
-  speechQueue.length = 0;
+  // Remove only queued idle lines — host finishes current sentence, then replies
+  clearPendingIdle();
 
-  // ── Bid check ──────────────────────────────────────────────────────────
-  // Comments like "100", "bid 100", "$100" are bids, not chat — handle them
-  // separately so they update bid state and don't get sent to Gemini.
+  // ── Bid check ─────────────────────────────────────────────────────────────
   const bidAmount = parseBid(comment);
   if (bidAmount !== null) {
     const result = submitBid(bidAmount, username);
@@ -61,43 +89,33 @@ export async function handleComment({ username, comment }) {
       broadcast({ type: "bidUpdate", ...bidState });
       console.log(`[BID] ${username} -> $${bidAmount} (accepted)`);
       try {
+        // generateBidAck returns a line that naturally bridges from whatever
+        // the host was saying ("...and boom — username just dropped $X!")
         const ack = await generateBidAck(username, bidAmount, getProduct());
-        speak(ack);
+        speak(ack, "bid");
       } catch (err) {
-        console.error("Bid ack generation failed:", err.message);
-        speak(`We've got $${bidAmount} from ${username}! Anyone going higher?`);
+        console.error("Bid ack failed:", err.message);
+        speak(`Boom — ${username} just bid $${bidAmount}! Who's going higher?`, "bid");
       }
     } else {
       console.log(`[BID] ${username} -> $${bidAmount} (rejected: ${result.reason})`);
-      // Rejected bids (too low / below increment) don't interrupt the stream —
-      // a real host doesn't stop to address every under-bid, just keeps going.
+      // Rejected/under bids don't interrupt the host — same as a real auction
     }
     return;
   }
 
+  // ── Regular comment ────────────────────────────────────────────────────────
   try {
-    const response = await generateCommentResponse(username, comment);
-    speak(response);
+    // generateTransition weaves the reply into the flow naturally, as if the
+    // host noticed the comment while mid-stream and pivots to address it
+    const response = await generateTransition(username, comment);
+    speak(response, "comment");
   } catch (err) {
     console.error("Comment response failed:", err.message);
   }
 }
 
-// ─── Idle chatter ──────────────────────────────────────────────────────────
-const idleManager = new IdleTalkManager({
-  onSpeak: async () => {
-    // Don't fire idle if avatar is currently speaking or queue has items
-    if (isSpeaking || speechQueue.length > 0) return;
-    try {
-      const text = await generateIdleChatter();
-      speak(text);
-    } catch (err) {
-      console.error("Idle chatter failed:", err.message);
-    }
-  },
-});
-
-// ─── Boot ──────────────────────────────────────────────────────────────────
+// ─── Startup ─────────────────────────────────────────────────────────────────
 const httpServer = startApiServer({
   startStream,
   stopStream,
@@ -107,14 +125,15 @@ const httpServer = startApiServer({
 
 const { broadcast: realBroadcast } = startWebSocketServer(httpServer, {
   onClientConnect: () => {
-    console.log("Live view opened — starting idle chatter.");
-    idleManager.start();
+    console.log("Live view opened — host starting.");
+    // Kick off the continuous talk loop immediately when someone opens the page
+    fillWithIdleChatter();
   },
   onClientDisconnect: () => {
-    console.log("No clients connected — pausing idle chatter.");
-    idleManager.stop();
+    console.log("No clients — host paused.");
     speechQueue.length = 0;
     isSpeaking = false;
+    isGeneratingIdle = false;
   },
 });
 broadcast = realBroadcast;
@@ -122,7 +141,7 @@ broadcast = realBroadcast;
 console.log("AI TikTok Live Host running.");
 testGeminiConnection();
 
-// ─── TikTok connection ─────────────────────────────────────────────────────
+// ─── TikTok connection ────────────────────────────────────────────────────────
 function startStream(tiktokUsername) {
   if (activeConnection) return;
   setConnectionState({ tiktokUsername, isLive: false, roomId: null, lastError: null });
