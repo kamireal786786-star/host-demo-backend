@@ -4,7 +4,7 @@ import { startWebSocketServer } from "./wsServer.js";
 import { startApiServer } from "./apiServer.js";
 import { setConnectionState, submitBid, getBidState, getProduct } from "./store.js";
 import { parseBid } from "./bidParser.js";
-import { generateCommentResponse, generateIdleChatter, generateBidAck, generateTransition, testGeminiConnection } from "./gptHandler.js";
+import { generateIdleChatter, generateBidAck, generateTransition, testGeminiConnection } from "./gptHandler.js";
 
 validateConfig();
 
